@@ -146,7 +146,3 @@ Defined in schema as:
 * Add `"temperaturePollingInterval": X` in your strategy block
 * Avoids hammering the EC every second
 * Keeps your Framework system calm, cool, and stable 🧊
-
----
-
-Let me know if you want a badge, diagram, or animated example showing polling vs fan updating visually!
