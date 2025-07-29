@@ -148,7 +148,40 @@ class FanController:
                         f"{param} must be between {minimum} and {maximum}"
                     )
 
-            self.configuration.update_strategy_param(strategy_name, param, value)
+            # Explicit type conversion based on current parameter type
+            current_val = getattr(self.configuration.get_strategy(strategy_name), param, None)
+            expected_type = type(current_val)
+            converted_value = value
+
+            if expected_type is bool:
+                if isinstance(value, str):
+                    if value.lower() in ("true", "1", "yes", "on"):
+                        converted_value = True
+                    elif value.lower() in ("false", "0", "no", "off"):
+                        converted_value = False
+                    else:
+                        raise ConfigurationParsingException(
+                            f"Invalid boolean value for '{param}': {value}"
+                        )
+                else:
+                    converted_value = bool(value)
+            elif expected_type is int:
+                try:
+                    converted_value = int(value)
+                except ValueError:
+                    raise ConfigurationParsingException(
+                        f"Invalid integer value for '{param}': {value}"
+                    )
+            elif expected_type is float:
+                try:
+                    converted_value = float(value)
+                except ValueError:
+                    raise ConfigurationParsingException(
+                        f"Invalid float value for '{param}': {value}"
+                    )
+            # Add more type checks as needed
+
+            self.configuration.update_strategy_param(strategy_name, param, converted_value)
 
             if self.overwritten_strategy and self.overwritten_strategy.name == strategy_name:
                 self.overwrite_strategy(strategy_name)

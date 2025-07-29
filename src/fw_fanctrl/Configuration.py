@@ -95,15 +95,26 @@ class Configuration:
             )
 
         try:
-            value = type(current_value)(value)
+            if isinstance(current_value, bool):
+                if isinstance(value, str):
+                    if value.lower() in ("true", "1", "yes", "on"):
+                        value = True
+                    elif value.lower() in ("false", "0", "no", "off"):
+                        value = False
+                    else:
+                        raise ValueError(f"Cannot convert '{value}' to bool")
+                else:
+                    value = bool(value)
+            else:
+                value = type(current_value)(value)
         except (TypeError, ValueError) as e:
             raise ConfigurationParsingException(
                 f"Invalid value for '{param}': {value}"
             ) from e
 
-        # Range validation using schema values if present
-        prop_schema = VALIDATION_SCHEMA["$defs"]["strategy"]["properties"].get(param)
-        if prop_schema:
+        if prop_schema := VALIDATION_SCHEMA["$defs"]["strategy"]["properties"].get(
+            param
+        ):
             minimum = prop_schema.get("minimum")
             maximum = prop_schema.get("maximum")
             if (minimum is not None and value < minimum) or (
@@ -113,7 +124,27 @@ class Configuration:
                     f"{param} must be between {minimum} and {maximum}"
                 )
 
-        new_data = copy.deepcopy(self.data)
+You can drop the full deep‐copy + JSON round‐trip and validate in‐place. For example:
+
+```python
+import jsonschema
+
+def update_strategy_param(self, strategy_name, param, value):
+    # … pre‐checks, type coercion, manual range checks …
+
+    # 1) In‐place update
+    self.data["strategies"][strategy_name][param] = value
+
+    # 2) Direct schema validation
+    try:
+        jsonschema.validate(self.data, VALIDATION_SCHEMA)
+    except jsonschema.ValidationError as e:
+        # revert on failure
+        # (optional) self.reload()  or cache old value before mutation
+        raise ConfigurationParsingException(f"Schema violation: {e.message}") from e
+
+    # 3) Persist
+    self.save()
         new_data["strategies"][strategy_name][param] = value
 
         # Validate against schema and commit
