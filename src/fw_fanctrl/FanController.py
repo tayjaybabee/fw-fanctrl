@@ -4,7 +4,7 @@ import threading
 import time
 from time import sleep
 
-from fw_fanctrl.Configuration import Configuration
+from fw_fanctrl.Configuration import Configuration, VALIDATION_SCHEMA
 from fw_fanctrl.dto.command_result.ConfigurationReloadCommandResult import ConfigurationReloadCommandResult
 from fw_fanctrl.dto.command_result.PrintActiveCommandResult import PrintActiveCommandResult
 from fw_fanctrl.dto.command_result.PrintCurrentStrategyCommandResult import PrintCurrentStrategyCommandResult
@@ -19,6 +19,7 @@ from fw_fanctrl.dto.runtime_result.RuntimeResult import RuntimeResult
 from fw_fanctrl.dto.runtime_result.StatusRuntimeResult import StatusRuntimeResult
 from fw_fanctrl.enum.CommandStatus import CommandStatus
 from fw_fanctrl.exception.InvalidStrategyException import InvalidStrategyException
+from fw_fanctrl.exception.ConfigurationParsingException import ConfigurationParsingException
 from fw_fanctrl.exception.UnknownCommandException import UnknownCommandException
 
 
@@ -132,6 +133,21 @@ class FanController:
             if strategy_name not in self.configuration.get_strategies():
                 raise InvalidStrategyException(f"The specified strategy is invalid: {args.strategy}")
 
+            if param == "temperaturePollingInterval":
+                schema_prop = VALIDATION_SCHEMA["$defs"]["strategy"]["properties"][param]
+                minimum = schema_prop.get("minimum", 1)
+                maximum = schema_prop.get("maximum", 60)
+                try:
+                    numeric_val = int(value)
+                except ValueError:
+                    raise ConfigurationParsingException(
+                        f"Invalid value for '{param}': {value}"
+                    )
+                if numeric_val < minimum or numeric_val > maximum:
+                    raise ConfigurationParsingException(
+                        f"{param} must be between {minimum} and {maximum}"
+                    )
+
             self.configuration.update_strategy_param(strategy_name, param, value)
 
             if self.overwritten_strategy and self.overwritten_strategy.name == strategy_name:
@@ -196,31 +212,33 @@ class FanController:
 
     def run(self, debug=True):
         try:
-            last_temp_read_time = time.monotonic()
-            last_speed_update_time = time.monotonic()
             cached_temp = self.get_actual_temperature()
+            now = time.monotonic()
+            strategy = self.get_current_strategy()
+            next_temp_read = now + strategy.temperature_polling_interval
+            next_speed_update = now + strategy.fan_speed_update_frequency
 
             while True:
                 if self.active:
-                    strategy = self.get_current_strategy()
                     now = time.monotonic()
+                    strategy = self.get_current_strategy()
 
-                    # Only query EC for temperature based on strategy-defined interval
-                    if now - last_temp_read_time >= strategy.temperature_polling_interval:
+                    if now >= next_temp_read:
                         cached_temp = self.get_actual_temperature()
-                        last_temp_read_time = now
+                        next_temp_read = now + strategy.temperature_polling_interval
 
-                    # Update fan speed based on update frequency
-                    if now - last_speed_update_time >= strategy.fan_speed_update_frequency:
+                    if now >= next_speed_update:
                         self.adapt_speed(cached_temp)
-                        last_speed_update_time = now
+                        next_speed_update = now + strategy.fan_speed_update_frequency
 
                     self.temp_history.append(cached_temp)
 
                     if debug:
                         self.print_state()
 
-                    sleep(1)
+                    sleep_time = min(next_temp_read, next_speed_update) - time.monotonic()
+                    if sleep_time > 0:
+                        sleep(sleep_time)
                 else:
                     sleep(5)
         except InvalidStrategyException as e:

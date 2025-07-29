@@ -1,4 +1,5 @@
 import json
+import copy
 from json import JSONDecodeError
 from os.path import isfile
 from shutil import copyfile
@@ -12,6 +13,7 @@ from fw_fanctrl.exception.InvalidStrategyException import InvalidStrategyExcepti
 
 VALIDATION_SCHEMA_PATH = INTERNAL_RESOURCES_PATH.joinpath("config.schema.json")
 ORIGINAL_CONFIG_PATH = INTERNAL_RESOURCES_PATH.joinpath("config.json")
+VALIDATION_SCHEMA = json.load(VALIDATION_SCHEMA_PATH.open("r"))
 
 
 class Configuration:
@@ -81,25 +83,37 @@ class Configuration:
         strategy = self.data["strategies"][strategy_name]
 
         if param not in strategy:
-            raise ConfigurationParsingException(f"Unknown parameter '{param}' for strategy '{strategy_name}'")
+            raise ConfigurationParsingException(
+                f"Unknown parameter '{param}' for strategy '{strategy_name}'"
+            )
 
         current_value = strategy[param]
 
-        # Convert value to the same type as existing parameter
+        if isinstance(current_value, list):
+            raise ConfigurationParsingException(
+                f"Editing list parameter '{param}' is not supported via CLI"
+            )
+
         try:
-            if isinstance(current_value, int):
-                value = int(value)
-            elif isinstance(current_value, float):
-                value = float(value)
-            elif isinstance(current_value, list):
-                raise ConfigurationParsingException(f"Editing list parameter '{param}' is not supported via CLI")
-        except ValueError as e:
-            raise ConfigurationParsingException(f"Invalid value for '{param}': {value}") from e
+            value = type(current_value)(value)
+        except (TypeError, ValueError) as e:
+            raise ConfigurationParsingException(
+                f"Invalid value for '{param}': {value}"
+            ) from e
 
-        if param == "temperaturePollingInterval" and not 1 <= value <= 60:
-            raise ConfigurationParsingException("temperaturePollingInterval must be between 1 and 60 seconds")
+        # Range validation using schema values if present
+        prop_schema = VALIDATION_SCHEMA["$defs"]["strategy"]["properties"].get(param)
+        if prop_schema:
+            minimum = prop_schema.get("minimum")
+            maximum = prop_schema.get("maximum")
+            if (minimum is not None and value < minimum) or (
+                maximum is not None and value > maximum
+            ):
+                raise ConfigurationParsingException(
+                    f"{param} must be between {minimum} and {maximum}"
+                )
 
-        new_data = json.loads(json.dumps(self.data))
+        new_data = copy.deepcopy(self.data)
         new_data["strategies"][strategy_name][param] = value
 
         # Validate against schema and commit
