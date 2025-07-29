@@ -137,7 +137,7 @@ Defined in schema as:
 | On battery (quiet)     | 5–10 seconds                   |
 | Light daily use        | 3–5 seconds                    |
 | Gaming / performance   | 1–2 seconds                    |
-| Benchmarking / testing | 1 second (or lower if allowed) |
+| Benchmarking / testing | 1 second (minimum allowed) |
 
 ---
 

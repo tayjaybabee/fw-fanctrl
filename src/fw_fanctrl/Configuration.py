@@ -72,3 +72,36 @@ class Configuration:
 
     def get_discharging_strategy(self):
         return self.get_strategy("strategyOnDischarging")
+
+    def update_strategy_param(self, strategy_name, param, value):
+        """Update a single strategy parameter with schema validation."""
+        if strategy_name not in self.data["strategies"]:
+            raise InvalidStrategyException(strategy_name)
+
+        strategy = self.data["strategies"][strategy_name]
+
+        if param not in strategy:
+            raise ConfigurationParsingException(f"Unknown parameter '{param}' for strategy '{strategy_name}'")
+
+        current_value = strategy[param]
+
+        # Convert value to the same type as existing parameter
+        try:
+            if isinstance(current_value, int):
+                value = int(value)
+            elif isinstance(current_value, float):
+                value = float(value)
+            elif isinstance(current_value, list):
+                raise ConfigurationParsingException(f"Editing list parameter '{param}' is not supported via CLI")
+        except ValueError as e:
+            raise ConfigurationParsingException(f"Invalid value for '{param}': {value}") from e
+
+        if param == "temperaturePollingInterval" and not 1 <= value <= 60:
+            raise ConfigurationParsingException("temperaturePollingInterval must be between 1 and 60 seconds")
+
+        new_data = json.loads(json.dumps(self.data))
+        new_data["strategies"][strategy_name][param] = value
+
+        # Validate against schema and commit
+        self.data = self.parse(json.dumps(new_data))
+        self.save()

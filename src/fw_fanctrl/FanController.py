@@ -1,6 +1,7 @@
 import collections
 import sys
 import threading
+import time
 from time import sleep
 
 from fw_fanctrl.Configuration import Configuration
@@ -30,7 +31,6 @@ class FanController:
     speed = 0
     temp_history = collections.deque([0] * 100, maxlen=100)
     active = True
-    timecount = 0
 
     def __init__(self, hardware_controller, socket_controller, config_path, strategy_name, output_format):
         self.hardware_controller = hardware_controller
@@ -72,11 +72,9 @@ class FanController:
             self.clear_overwritten_strategy()
             return
         self.overwritten_strategy = self.configuration.get_strategy(strategy_name)
-        self.timecount = 0
 
     def clear_overwritten_strategy(self):
         self.overwritten_strategy = None
-        self.timecount = 0
 
     def get_current_strategy(self):
         if self.overwritten_strategy is not None:
@@ -134,23 +132,13 @@ class FanController:
             if strategy_name not in self.configuration.get_strategies():
                 raise InvalidStrategyException(f"The specified strategy is invalid: {args.strategy}")
 
-            strategy_dict = self.configuration.data["strategies"][strategy_name]
-
-            try:
-                value = int(value)
-            except ValueError:
-                pass
-
-            strategy_dict[param] = value
-            self.configuration.save()
+            self.configuration.update_strategy_param(strategy_name, param, value)
 
             if self.overwritten_strategy and self.overwritten_strategy.name == strategy_name:
                 self.overwrite_strategy(strategy_name)
 
             return SetConfigurationCommandResult(
-                self.get_current_strategy().name,
-                vars(self.configuration),
-                self.overwritten_strategy is None
+                self.get_current_strategy().name, vars(self.configuration), self.overwritten_strategy is None
             )
 
         raise UnknownCommandException(f"Unknown command: '{args.command}', unexpected.")
@@ -208,13 +196,14 @@ class FanController:
 
     def run(self, debug=True):
         try:
-            last_temp_read_time = 0
-            cached_temp = 0.0
+            last_temp_read_time = time.monotonic()
+            last_speed_update_time = time.monotonic()
+            cached_temp = self.get_actual_temperature()
 
             while True:
                 if self.active:
                     strategy = self.get_current_strategy()
-                    now = self.timecount
+                    now = time.monotonic()
 
                     # Only query EC for temperature based on strategy-defined interval
                     if now - last_temp_read_time >= strategy.temperature_polling_interval:
@@ -222,15 +211,15 @@ class FanController:
                         last_temp_read_time = now
 
                     # Update fan speed based on update frequency
-                    if now % strategy.fan_speed_update_frequency == 0:
+                    if now - last_speed_update_time >= strategy.fan_speed_update_frequency:
                         self.adapt_speed(cached_temp)
+                        last_speed_update_time = now
 
                     self.temp_history.append(cached_temp)
 
                     if debug:
                         self.print_state()
 
-                    self.timecount += 1
                     sleep(1)
                 else:
                     sleep(5)
