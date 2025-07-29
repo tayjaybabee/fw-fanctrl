@@ -126,6 +126,33 @@ class FanController:
             return SetConfigurationCommandResult(
                 self.get_current_strategy().name, vars(self.configuration), self.overwritten_strategy is None
             )
+        elif args.command == "set_strategy_param":
+            strategy_name = args.strategy
+            param = args.param
+            value = args.value
+
+            if strategy_name not in self.configuration.get_strategies():
+                raise InvalidStrategyException(f"The specified strategy is invalid: {args.strategy}")
+
+            strategy_dict = self.configuration.data["strategies"][strategy_name]
+
+            try:
+                value = int(value)
+            except ValueError:
+                pass
+
+            strategy_dict[param] = value
+            self.configuration.save()
+
+            if self.overwritten_strategy and self.overwritten_strategy.name == strategy_name:
+                self.overwrite_strategy(strategy_name)
+
+            return SetConfigurationCommandResult(
+                self.get_current_strategy().name,
+                vars(self.configuration),
+                self.overwritten_strategy is None
+            )
+
         raise UnknownCommandException(f"Unknown command: '{args.command}', unexpected.")
 
     # return mean temperature over a given time interval (in seconds)
@@ -181,18 +208,28 @@ class FanController:
 
     def run(self, debug=True):
         try:
+            last_temp_read_time = 0
+            cached_temp = 0.0
+
             while True:
                 if self.active:
-                    temp = self.get_actual_temperature()
-                    # update fan speed every "fanSpeedUpdateFrequency" seconds
-                    if self.timecount % self.get_current_strategy().fan_speed_update_frequency == 0:
-                        self.adapt_speed(temp)
-                        self.timecount = 0
+                    strategy = self.get_current_strategy()
+                    now = self.timecount
 
-                    self.temp_history.append(temp)
+                    # Only query EC for temperature based on strategy-defined interval
+                    if now - last_temp_read_time >= strategy.temperature_polling_interval:
+                        cached_temp = self.get_actual_temperature()
+                        last_temp_read_time = now
+
+                    # Update fan speed based on update frequency
+                    if now % strategy.fan_speed_update_frequency == 0:
+                        self.adapt_speed(cached_temp)
+
+                    self.temp_history.append(cached_temp)
 
                     if debug:
                         self.print_state()
+
                     self.timecount += 1
                     sleep(1)
                 else:
