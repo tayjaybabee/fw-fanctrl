@@ -1,9 +1,10 @@
 import collections
 import sys
 import threading
+import time
 from time import sleep
 
-from fw_fanctrl.Configuration import Configuration
+from fw_fanctrl.Configuration import Configuration, VALIDATION_SCHEMA
 from fw_fanctrl.dto.command_result.ConfigurationReloadCommandResult import ConfigurationReloadCommandResult
 from fw_fanctrl.dto.command_result.PrintActiveCommandResult import PrintActiveCommandResult
 from fw_fanctrl.dto.command_result.PrintCurrentStrategyCommandResult import PrintCurrentStrategyCommandResult
@@ -18,6 +19,7 @@ from fw_fanctrl.dto.runtime_result.RuntimeResult import RuntimeResult
 from fw_fanctrl.dto.runtime_result.StatusRuntimeResult import StatusRuntimeResult
 from fw_fanctrl.enum.CommandStatus import CommandStatus
 from fw_fanctrl.exception.InvalidStrategyException import InvalidStrategyException
+from fw_fanctrl.exception.ConfigurationParsingException import ConfigurationParsingException
 from fw_fanctrl.exception.UnknownCommandException import UnknownCommandException
 
 
@@ -30,7 +32,6 @@ class FanController:
     speed = 0
     temp_history = collections.deque([0] * 100, maxlen=100)
     active = True
-    timecount = 0
 
     def __init__(self, hardware_controller, socket_controller, config_path, strategy_name, output_format):
         self.hardware_controller = hardware_controller
@@ -72,11 +73,9 @@ class FanController:
             self.clear_overwritten_strategy()
             return
         self.overwritten_strategy = self.configuration.get_strategy(strategy_name)
-        self.timecount = 0
 
     def clear_overwritten_strategy(self):
         self.overwritten_strategy = None
-        self.timecount = 0
 
     def get_current_strategy(self):
         if self.overwritten_strategy is not None:
@@ -134,23 +133,61 @@ class FanController:
             if strategy_name not in self.configuration.get_strategies():
                 raise InvalidStrategyException(f"The specified strategy is invalid: {args.strategy}")
 
-            strategy_dict = self.configuration.data["strategies"][strategy_name]
+            if param == "temperaturePollingInterval":
+                schema_prop = VALIDATION_SCHEMA["$defs"]["strategy"]["properties"][param]
+                minimum = schema_prop.get("minimum", 1)
+                maximum = schema_prop.get("maximum", 60)
+                try:
+                    numeric_val = int(value)
+                except ValueError:
+                    raise ConfigurationParsingException(
+                        f"Invalid value for '{param}': {value}"
+                    )
+                if numeric_val < minimum or numeric_val > maximum:
+                    raise ConfigurationParsingException(
+                        f"{param} must be between {minimum} and {maximum}"
+                    )
 
-            try:
-                value = int(value)
-            except ValueError:
-                pass
+            # Explicit type conversion based on current parameter type
+            current_val = getattr(self.configuration.get_strategy(strategy_name), param, None)
+            expected_type = type(current_val)
+            converted_value = value
 
-            strategy_dict[param] = value
-            self.configuration.save()
+            if expected_type is bool:
+                if isinstance(value, str):
+                    if value.lower() in ("true", "1", "yes", "on"):
+                        converted_value = True
+                    elif value.lower() in ("false", "0", "no", "off"):
+                        converted_value = False
+                    else:
+                        raise ConfigurationParsingException(
+                            f"Invalid boolean value for '{param}': {value}"
+                        )
+                else:
+                    converted_value = bool(value)
+            elif expected_type is int:
+                try:
+                    converted_value = int(value)
+                except ValueError:
+                    raise ConfigurationParsingException(
+                        f"Invalid integer value for '{param}': {value}"
+                    )
+            elif expected_type is float:
+                try:
+                    converted_value = float(value)
+                except ValueError:
+                    raise ConfigurationParsingException(
+                        f"Invalid float value for '{param}': {value}"
+                    )
+            # Add more type checks as needed
+
+            self.configuration.update_strategy_param(strategy_name, param, converted_value)
 
             if self.overwritten_strategy and self.overwritten_strategy.name == strategy_name:
                 self.overwrite_strategy(strategy_name)
 
             return SetConfigurationCommandResult(
-                self.get_current_strategy().name,
-                vars(self.configuration),
-                self.overwritten_strategy is None
+                self.get_current_strategy().name, vars(self.configuration), self.overwritten_strategy is None
             )
 
         raise UnknownCommandException(f"Unknown command: '{args.command}', unexpected.")
@@ -208,30 +245,33 @@ class FanController:
 
     def run(self, debug=True):
         try:
-            last_temp_read_time = 0
-            cached_temp = 0.0
+            cached_temp = self.get_actual_temperature()
+            now = time.monotonic()
+            strategy = self.get_current_strategy()
+            next_temp_read = now + strategy.temperature_polling_interval
+            next_speed_update = now + strategy.fan_speed_update_frequency
 
             while True:
                 if self.active:
+                    now = time.monotonic()
                     strategy = self.get_current_strategy()
-                    now = self.timecount
 
-                    # Only query EC for temperature based on strategy-defined interval
-                    if now - last_temp_read_time >= strategy.temperature_polling_interval:
+                    if now >= next_temp_read:
                         cached_temp = self.get_actual_temperature()
-                        last_temp_read_time = now
+                        next_temp_read = now + strategy.temperature_polling_interval
 
-                    # Update fan speed based on update frequency
-                    if now % strategy.fan_speed_update_frequency == 0:
+                    if now >= next_speed_update:
                         self.adapt_speed(cached_temp)
+                        next_speed_update = now + strategy.fan_speed_update_frequency
 
                     self.temp_history.append(cached_temp)
 
                     if debug:
                         self.print_state()
 
-                    self.timecount += 1
-                    sleep(1)
+                    sleep_time = min(next_temp_read, next_speed_update) - time.monotonic()
+                    if sleep_time > 0:
+                        sleep(sleep_time)
                 else:
                     sleep(5)
         except InvalidStrategyException as e:
