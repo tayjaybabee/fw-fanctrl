@@ -47,6 +47,27 @@ class CommandParser:
         commands_sub_parser = self.parser.add_subparsers(dest="command")
         commands_sub_parser.required = True
 
+        set_param_command = commands_sub_parser.add_parser(
+            "set_strategy_param",
+            description="Set a single parameter value in a strategy",
+            formatter_class=argparse.RawTextHelpFormatter
+        )
+
+        set_param_command.add_argument(
+            "strategy",
+            help="Name of the strategy to modify."
+        )
+
+        set_param_command.add_argument(
+            "param",
+            help="Name of the parameter to update (e.g. temperaturePollingInterval)."
+        )
+
+        set_param_command.add_argument(
+            "value",
+            help="The value to set (will be parsed as int if possible)."
+        )
+
         if not self.is_remote:
             run_command = commands_sub_parser.add_parser(
                 "run",

@@ -12,6 +12,7 @@ from fw_fanctrl.exception.InvalidStrategyException import InvalidStrategyExcepti
 
 VALIDATION_SCHEMA_PATH = INTERNAL_RESOURCES_PATH.joinpath("config.schema.json")
 ORIGINAL_CONFIG_PATH = INTERNAL_RESOURCES_PATH.joinpath("config.json")
+VALIDATION_SCHEMA = json.load(VALIDATION_SCHEMA_PATH.open("r"))
 
 
 class Configuration:
@@ -72,3 +73,52 @@ class Configuration:
 
     def get_discharging_strategy(self):
         return self.get_strategy("strategyOnDischarging")
+
+    def coerce_strategy_param(self, strategy_name, param, value):
+        """Coerce a parameter value according to the schema."""
+        if strategy_name not in self.data["strategies"]:
+            raise InvalidStrategyException(strategy_name)
+
+        strategy_schema = VALIDATION_SCHEMA["$defs"]["strategy"]["properties"]
+        if param not in strategy_schema:
+            valid_params = ", ".join(sorted(strategy_schema.keys()))
+            raise ConfigurationParsingException(
+                f"Unknown parameter '{param}' for strategy '{strategy_name}'. "
+                f"Valid parameters are: {valid_params}"
+            )
+
+        expected_type = strategy_schema[param].get("type")
+
+        try:
+            if expected_type == "boolean":
+                if isinstance(value, str):
+                    if value.lower() in ("true", "1", "yes", "on"):
+                        return True
+                    if value.lower() in ("false", "0", "no", "off"):
+                        return False
+                    raise ValueError
+                return bool(value)
+            if expected_type == "integer":
+                return int(value)
+            if expected_type == "number":
+                return float(value)
+            if expected_type == "array":
+                raise ConfigurationParsingException(f"Editing list parameter '{param}' is not supported via CLI")
+            return str(value)
+        except (TypeError, ValueError) as e:
+            raise ConfigurationParsingException(f"Invalid value for '{param}': {value}") from e
+
+    def update_strategy_param(self, strategy_name, param, value):
+        """Update a single strategy parameter with schema validation."""
+        coerced = self.coerce_strategy_param(strategy_name, param, value)
+        strategy = self.data["strategies"][strategy_name]
+        old_value = strategy.get(param)
+        strategy[param] = coerced
+
+        try:
+            jsonschema.validate(self.data, VALIDATION_SCHEMA)
+        except jsonschema.ValidationError as e:
+            strategy[param] = old_value
+            raise ConfigurationParsingException(f"Schema violation: {e.message}") from e
+
+        self.save()
