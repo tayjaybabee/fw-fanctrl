@@ -81,7 +81,11 @@ class Configuration:
 
         strategy_schema = VALIDATION_SCHEMA["$defs"]["strategy"]["properties"]
         if param not in strategy_schema:
-            raise ConfigurationParsingException(f"Unknown parameter '{param}' for strategy '{strategy_name}'")
+            valid_params = ", ".join(sorted(strategy_schema.keys()))
+            raise ConfigurationParsingException(
+                f"Unknown parameter '{param}' for strategy '{strategy_name}'. "
+                f"Valid parameters are: {valid_params}"
+            )
 
         expected_type = strategy_schema[param].get("type")
 
