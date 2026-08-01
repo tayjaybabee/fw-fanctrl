@@ -118,7 +118,7 @@ curl -L "https://github.com/TamtamHero/fw-fanctrl/archive/refs/heads/main.zip" -
 
 Then run the installation script with administrator privileges
 
-> ⚠ **Linux Mint** users should add the `--effective-installation-dir "/usr/local/bin"` option.
+> ⚠ **Linux Mint** and **Pop! OS** users should add the `--effective-installation-dir "/usr/local/bin"` option.
 >
 > ⚠ **Fedora Atomic desktops** users should add the `--prefix-dir "/var/usrlocal/"` option.
 
